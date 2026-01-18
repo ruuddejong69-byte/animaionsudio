@@ -1,493 +1,538 @@
-"use client";
+"use client"
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Play, Pause, RotateCcw, Infinity as InfinityIcon, Zap, ZapOff } from 'lucide-react';
-import { AnimatableToggle, StudioGooeyFilter } from './AnimatableToggle';
-import { BezierCurveEditor } from './BezierCurveEditor';
-import { ColorPicker } from './ColorPicker';
-import { cn } from '@/lib/utils';
+/**
+ * AnimationStudio - Universal animation component editor
+ * 
+ * A professional tool for designing, configuring, and exporting animated components.
+ * 
+ * Features:
+ * - Component switcher to work with any registered component
+ * - Split mode for A/B comparison of configurations
+ * - Real-time preview with interactive controls
+ * - Advanced bezier curve editor with visual preview
+ * - Comprehensive prop inspector
+ * - Code drawer with copyable usage examples
+ */
 
-interface AnimationConfig {
-  duration: number;
-  delay: number;
-  toggleCount: number;
-  infiniteLoop: boolean;
-  bezier: [number, number, number, number];
-  speed: number;
+import { useCallback, useEffect, useState } from 'react'
+import { Check, Code, Copy, Columns2, Play, RotateCcw, Square, X } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
+import { PropInspector } from './editors/PropInspector'
+import { getAllComponents, getComponent } from './registry/ComponentRegistry'
+import { initializeComponents } from './registry/definitions'
+import { generateCode, copyToClipboard } from './core/code-generator'
+import type { AnimationConfig, ComponentDefinition } from './core/types'
+
+/**
+ * Configuration state for a single preview panel
+ */
+interface PanelConfig {
+  props: Record<string, any>
+  isActive: boolean
 }
 
-interface ColorConfig {
-  active: string;
-  success: string;
-  warning: string;
-  danger: string;
-  default: string;
-  defaultDark: string;
-}
+/**
+ * Custom hook for managing component state
+ */
+function useComponentState(definition: ComponentDefinition | undefined) {
+  const [config, setConfig] = useState<PanelConfig>({
+    props: definition?.defaultProps || {},
+    isActive: false
+  })
 
-const DEFAULT_ANIMATION: AnimationConfig = {
-  duration: 500,
-  delay: 500,
-  toggleCount: 2,
-  infiniteLoop: false,
-  bezier: [0.25, 0.1, 0.25, 1],
-  speed: 1,
-};
-
-const DEFAULT_COLORS: ColorConfig = {
-  active: '#275EFE',
-  success: '#10B981',
-  warning: '#F59E0B',
-  danger: '#EF4444',
-  default: '#D2D6E9',
-  defaultDark: '#C7CBDF',
-};
-
-type ActiveVariant = 'active' | 'success' | 'warning' | 'danger';
-
-export function AnimationStudio() {
-  const [config, setConfig] = useState<AnimationConfig>(DEFAULT_ANIMATION);
-  const [colors, setColors] = useState<ColorConfig>(DEFAULT_COLORS);
-  const [activeVariant, setActiveVariant] = useState<ActiveVariant>('active');
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [toggleState, setToggleState] = useState(false);
-  const [currentToggle, setCurrentToggle] = useState(0);
-  const [activeTab, setActiveTab] = useState<'playback' | 'timing' | 'colors'>('playback');
-  
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
-
-  const effectiveDuration = config.duration / config.speed;
-  const effectiveDelay = config.delay / config.speed;
-
-  const clearTimers = useCallback(() => {
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    if (intervalRef.current) clearInterval(intervalRef.current);
-  }, []);
-
-  const runAnimation = useCallback(() => {
-    clearTimers();
-    setCurrentToggle(0);
-    
-    const totalToggles = config.infiniteLoop ? Infinity : config.toggleCount;
-    let count = 0;
-
-    const doToggle = () => {
-      if (!config.infiniteLoop && count >= totalToggles) {
-        setIsPlaying(false);
-        return;
-      }
-      
-      setToggleState(prev => !prev);
-      count++;
-      setCurrentToggle(count);
-
-      if (config.infiniteLoop || count < totalToggles) {
-        timeoutRef.current = setTimeout(doToggle, effectiveDuration + effectiveDelay);
-      } else {
-        timeoutRef.current = setTimeout(() => setIsPlaying(false), effectiveDuration);
-      }
-    };
-
-    doToggle();
-  }, [config.infiniteLoop, config.toggleCount, effectiveDuration, effectiveDelay, clearTimers]);
-
+  // Reset props when definition changes
   useEffect(() => {
-    if (isPlaying) {
-      runAnimation();
-    } else {
-      clearTimers();
+    if (definition) {
+      setConfig({
+        props: { ...definition.defaultProps },
+        isActive: false
+      })
     }
-    return clearTimers;
-  }, [isPlaying, runAnimation, clearTimers]);
+  }, [definition])
 
-  const handlePlay = () => {
-    if (isPlaying) {
-      setIsPlaying(false);
-    } else {
-      setIsPlaying(true);
+  const updateProp = useCallback((key: string, value: any) => {
+    setConfig(prev => ({
+      ...prev,
+      props: { ...prev.props, [key]: value }
+    }))
+  }, [])
+
+  const toggleActive = useCallback(() => {
+    setConfig(prev => ({ ...prev, isActive: !prev.isActive }))
+  }, [])
+
+  const setActive = useCallback((active: boolean) => {
+    setConfig(prev => ({ ...prev, isActive: active }))
+  }, [])
+
+  const reset = useCallback(() => {
+    if (definition) {
+      setConfig({
+        props: { ...definition.defaultProps },
+        isActive: false
+      })
     }
-  };
+  }, [definition])
 
-  const handleReset = () => {
-    setIsPlaying(false);
-    setToggleState(false);
-    setCurrentToggle(0);
-    clearTimers();
-  };
+  return { config, updateProp, toggleActive, setActive, reset, setConfig }
+}
 
-  const updateConfig = <K extends keyof AnimationConfig>(key: K, value: AnimationConfig[K]) => {
-    setConfig(prev => ({ ...prev, [key]: value }));
-  };
+/**
+ * Component Preview Panel
+ * Renders the component with current configuration
+ */
+function PreviewPanel({
+  definition,
+  config,
+  onToggle,
+  isPlaying,
+  label
+}: {
+  definition: ComponentDefinition
+  config: PanelConfig
+  onToggle: () => void
+  isPlaying: boolean
+  label?: string
+}) {
+  const Component = definition.component
+  const stateMode = definition.stateMode || 'toggle'
 
-  const updateColor = <K extends keyof ColorConfig>(key: K, value: string) => {
-    setColors(prev => ({ ...prev, [key]: value }));
-  };
-
-  const getActiveColor = () => colors[activeVariant];
-
-  const speedPresets = [
-    { label: '0.1x', value: 0.1 },
-    { label: '0.25x', value: 0.25 },
-    { label: '0.5x', value: 0.5 },
-    { label: '1x', value: 1 },
-    { label: '2x', value: 2 },
-  ];
+  // Build props based on state mode
+  const componentProps = { ...config.props }
+  
+  if (stateMode === 'toggle') {
+    componentProps.checked = config.isActive
+    componentProps.onCheckedChange = onToggle
+  } else if (stateMode === 'button') {
+    // For button, we cycle through states: normal -> loading -> success -> normal
+    componentProps.onClick = onToggle
+  }
 
   return (
-    <div className="min-h-screen bg-background">
-      <StudioGooeyFilter />
+    <div className="flex flex-col items-center justify-center gap-4 p-8 min-h-[250px] bg-gray-900 rounded-lg border border-gray-800">
+      {label && (
+        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+          {label}
+        </span>
+      )}
+      <Component {...componentProps} />
+    </div>
+  )
+}
+
+/**
+ * Code Drawer Content
+ * Shows the generated code with copy functionality
+ */
+function CodeDrawerContent({
+  definition,
+  config
+}: {
+  definition: ComponentDefinition
+  config: PanelConfig
+}) {
+  const [copiedCode, setCopiedCode] = useState<string | null>(null)
+
+  const animationConfig: AnimationConfig = {
+    componentId: definition.id,
+    props: config.props,
+    isActive: config.isActive
+  }
+
+  const generatedCode = generateCode(animationConfig, definition)
+
+  const handleCopy = async (code: string, type: string) => {
+    await copyToClipboard(code)
+    setCopiedCode(type)
+    setTimeout(() => setCopiedCode(null), 2000)
+  }
+
+  return (
+    <div className="space-y-6 py-4">
+      <Tabs defaultValue="usage" className="w-full">
+        <TabsList className="w-full grid grid-cols-3">
+          <TabsTrigger value="usage">Usage</TabsTrigger>
+          <TabsTrigger value="import">Import</TabsTrigger>
+          <TabsTrigger value="css">CSS</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="usage" className="space-y-4 mt-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-medium">Component Usage</h3>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => handleCopy(generatedCode.usageCode, 'usage')}
+            >
+              {copiedCode === 'usage' ? (
+                <>
+                  <Check className="w-4 h-4 mr-2" />
+                  Copied!
+                </>
+              ) : (
+                <>
+                  <Copy className="w-4 h-4 mr-2" />
+                  Copy
+                </>
+              )}
+            </Button>
+          </div>
+          <pre className="bg-gray-950 p-4 rounded-lg overflow-x-auto text-xs leading-relaxed">
+            <code>{generatedCode.usageCode}</code>
+          </pre>
+          <p className="text-xs text-muted-foreground">
+            Paste this into your code to use the component with your configured props.
+          </p>
+        </TabsContent>
+
+        <TabsContent value="import" className="space-y-4 mt-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-medium">Import Statement</h3>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => handleCopy(generatedCode.imports.join('\n'), 'import')}
+            >
+              {copiedCode === 'import' ? (
+                <>
+                  <Check className="w-4 h-4 mr-2" />
+                  Copied!
+                </>
+              ) : (
+                <>
+                  <Copy className="w-4 h-4 mr-2" />
+                  Copy
+                </>
+              )}
+            </Button>
+          </div>
+          <pre className="bg-gray-950 p-4 rounded-lg overflow-x-auto text-xs leading-relaxed">
+            <code>{generatedCode.imports.join('\n')}</code>
+          </pre>
+          <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+            <p className="text-xs text-blue-400">
+              <strong>Component Location:</strong>
+            </p>
+            <code className="text-xs text-blue-300 mt-1 block">{definition.importPath}</code>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="css" className="space-y-4 mt-4">
+          {generatedCode.cssCode ? (
+            <>
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-medium">CSS Animation</h3>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => handleCopy(generatedCode.cssCode!, 'css')}
+                >
+                  {copiedCode === 'css' ? (
+                    <>
+                      <Check className="w-4 h-4 mr-2" />
+                      Copied!
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-4 h-4 mr-2" />
+                      Copy
+                    </>
+                  )}
+                </Button>
+              </div>
+              <pre className="bg-gray-950 p-4 rounded-lg overflow-x-auto text-xs leading-relaxed">
+                <code>{generatedCode.cssCode}</code>
+              </pre>
+            </>
+          ) : (
+            <div className="p-8 text-center text-muted-foreground">
+              <p className="text-sm">Using default animation properties.</p>
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+/**
+ * Main Animation Studio Component
+ */
+export function AnimationStudio() {
+  // Initialize components on mount
+  useEffect(() => {
+    initializeComponents()
+  }, [])
+
+  const components = getAllComponents()
+  const [selectedComponentId, setSelectedComponentId] = useState<string>(
+    components[0]?.id || ''
+  )
+  const [splitMode, setSplitMode] = useState(false)
+  const [activePanel, setActivePanel] = useState<'A' | 'B'>('A')
+  const [isPlaying, setIsPlaying] = useState(false)
+
+  const currentDefinition = getComponent(selectedComponentId)
+
+  // Panel A state (primary)
+  const panelA = useComponentState(currentDefinition)
+  // Panel B state (comparison)
+  const panelB = useComponentState(currentDefinition)
+
+  // Get current active panel state
+  const currentPanel = activePanel === 'A' ? panelA : panelB
+
+  // Auto-play animation loop
+  useEffect(() => {
+    if (isPlaying && currentDefinition) {
+      const stateMode = currentDefinition.stateMode || 'toggle'
       
-      <div className="container max-w-6xl mx-auto px-4 py-8">
+      if (stateMode === 'toggle') {
+        const interval = setInterval(() => {
+          panelA.toggleActive()
+          if (splitMode) panelB.toggleActive()
+        }, 2000)
+        return () => clearInterval(interval)
+      } else if (stateMode === 'button') {
+        // For buttons, cycle: normal -> loading -> success -> normal
+        let step = 0
+        const interval = setInterval(() => {
+          step = (step + 1) % 3
+          if (step === 0) {
+            panelA.setConfig(prev => ({ ...prev, props: { ...prev.props, loading: false, success: false } }))
+            if (splitMode) panelB.setConfig(prev => ({ ...prev, props: { ...prev.props, loading: false, success: false } }))
+          } else if (step === 1) {
+            panelA.setConfig(prev => ({ ...prev, props: { ...prev.props, loading: true, success: false } }))
+            if (splitMode) panelB.setConfig(prev => ({ ...prev, props: { ...prev.props, loading: true, success: false } }))
+          } else {
+            panelA.setConfig(prev => ({ ...prev, props: { ...prev.props, loading: false, success: true } }))
+            if (splitMode) panelB.setConfig(prev => ({ ...prev, props: { ...prev.props, loading: false, success: true } }))
+          }
+        }, 1500)
+        return () => clearInterval(interval)
+      }
+    }
+  }, [isPlaying, currentDefinition, splitMode, panelA, panelB])
+
+  // Handle button state cycling for manual toggle
+  const handleToggle = useCallback((panel: 'A' | 'B') => {
+    const panelState = panel === 'A' ? panelA : panelB
+    const stateMode = currentDefinition?.stateMode || 'toggle'
+
+    if (stateMode === 'toggle') {
+      panelState.toggleActive()
+    } else if (stateMode === 'button') {
+      // Cycle: normal -> loading -> success -> normal
+      const { loading, success } = panelState.config.props
+      if (!loading && !success) {
+        panelState.updateProp('loading', true)
+      } else if (loading) {
+        panelState.updateProp('loading', false)
+        panelState.updateProp('success', true)
+      } else {
+        panelState.updateProp('success', false)
+      }
+    }
+  }, [currentDefinition, panelA, panelB])
+
+  if (!currentDefinition) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-950 text-white">
+        <p>No components registered. Please check the console for errors.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-950 text-white">
+      <div className="container mx-auto py-8 px-4">
         {/* Header */}
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-foreground mb-2">Animation Studio</h1>
-          <p className="text-muted-foreground">Fine-tune every aspect of the liquid toggle animation</p>
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h1 className="text-3xl font-bold mb-1 text-balance">Animation Studio</h1>
+            <p className="text-sm text-muted-foreground text-pretty">
+              Design, compare, and export animated components
+            </p>
+          </div>
+          
+          {/* Top-right actions */}
+          <div className="flex items-center gap-2">
+            <Button
+              variant={splitMode ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => {
+                setSplitMode(!splitMode)
+                if (!splitMode) {
+                  // Copy panel A config to panel B when entering split mode
+                  panelB.setConfig({ ...panelA.config })
+                }
+              }}
+            >
+              <Columns2 className="w-4 h-4 mr-2" />
+              {splitMode ? 'Exit Split' : 'Split Mode'}
+            </Button>
+            
+            <Sheet>
+              <SheetTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Code className="w-4 h-4 mr-2" />
+                  Get Code
+                </Button>
+              </SheetTrigger>
+              <SheetContent className="w-[500px] sm:max-w-[500px] bg-gray-900 border-gray-800">
+                <SheetHeader>
+                  <SheetTitle className="text-white">
+                    {splitMode ? `Panel ${activePanel} Code` : 'Generated Code'}
+                  </SheetTitle>
+                </SheetHeader>
+                <CodeDrawerContent
+                  definition={currentDefinition}
+                  config={currentPanel.config}
+                />
+              </SheetContent>
+            </Sheet>
+          </div>
         </div>
 
-        <div className="grid lg:grid-cols-[1fr,380px] gap-8">
-          {/* Preview Area */}
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-6">
+          {/* Left Column: Previews */}
           <div className="space-y-6">
-            <div className="bg-card border border-border rounded-2xl p-8 flex flex-col items-center justify-center min-h-[300px]">
-              <div className="scale-[2.5] mb-8">
-                <AnimatableToggle
-                  checked={toggleState}
-                  colors={{
-                    active: getActiveColor(),
-                    default: colors.default,
-                    defaultDark: colors.defaultDark,
-                  }}
-                  animation={{
-                    duration: effectiveDuration,
-                    bezier: config.bezier,
-                  }}
-                />
-              </div>
-              
-              <div className="flex items-center gap-4 mt-4">
-                <button
-                  onClick={handlePlay}
-                  className={cn(
-                    "flex items-center gap-2 px-6 py-3 rounded-xl font-medium transition-all",
-                    isPlaying 
-                      ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                      : "bg-primary text-primary-foreground hover:bg-primary/90"
-                  )}
-                >
-                  {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
-                  {isPlaying ? 'Pause' : 'Play'}
-                </button>
-                <button
-                  onClick={handleReset}
-                  className="flex items-center gap-2 px-4 py-3 rounded-xl border border-border bg-muted/50 hover:bg-muted transition-colors"
-                >
-                  <RotateCcw className="w-5 h-5" />
-                  Reset
-                </button>
-              </div>
-
-              {/* Stats */}
-              <div className="flex gap-6 mt-6 text-sm text-muted-foreground">
-                <div>
-                  Toggle count: <span className="font-mono text-foreground">{currentToggle}</span>
-                  {config.infiniteLoop && ' / ∞'}
-                  {!config.infiniteLoop && ` / ${config.toggleCount}`}
+            {/* Component Selector & Controls */}
+            <Card className="p-4 bg-gray-900 border-gray-800">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex-1">
+                  <Select value={selectedComponentId} onValueChange={setSelectedComponentId}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {components.map((comp) => (
+                        <SelectItem key={comp.id} value={comp.id}>
+                          {comp.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-                <div>
-                  Speed: <span className="font-mono text-foreground">{config.speed}x</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Variant Selector */}
-            <div className="bg-card border border-border rounded-xl p-4">
-              <label className="text-sm font-medium text-foreground mb-3 block">Active Variant</label>
-              <div className="flex gap-2">
-                {(['active', 'success', 'warning', 'danger'] as const).map((variant) => (
-                  <button
-                    key={variant}
-                    onClick={() => setActiveVariant(variant)}
-                    className={cn(
-                      "flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-all capitalize",
-                      activeVariant === variant
-                        ? "ring-2 ring-offset-2 ring-offset-background"
-                        : "bg-muted/50 hover:bg-muted"
-                    )}
-                    style={{
-                      backgroundColor: activeVariant === variant ? colors[variant] : undefined,
-                      color: activeVariant === variant ? '#fff' : undefined,
-                      ['--tw-ring-color' as string]: colors[variant],
+                
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleToggle(activePanel)}
+                  >
+                    Toggle
+                  </Button>
+                  <Button
+                    variant={isPlaying ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setIsPlaying(!isPlaying)}
+                  >
+                    {isPlaying ? <Square className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      panelA.reset()
+                      if (splitMode) panelB.reset()
                     }}
                   >
-                    {variant}
-                  </button>
-                ))}
+                    <RotateCcw className="w-4 h-4" />
+                  </Button>
+                </div>
               </div>
-            </div>
+              <p className="text-xs text-muted-foreground mt-2">
+                {currentDefinition.description}
+              </p>
+            </Card>
+
+            {/* Preview Area */}
+            {splitMode ? (
+              <div className="grid grid-cols-2 gap-4">
+                <div
+                  className={`cursor-pointer rounded-lg ${activePanel === 'A' ? 'ring-2 ring-blue-500' : ''}`}
+                  onClick={() => setActivePanel('A')}
+                >
+                  <PreviewPanel
+                    definition={currentDefinition}
+                    config={panelA.config}
+                    onToggle={() => handleToggle('A')}
+                    isPlaying={isPlaying}
+                    label="Panel A"
+                  />
+                </div>
+                <div
+                  className={`cursor-pointer rounded-lg ${activePanel === 'B' ? 'ring-2 ring-blue-500' : ''}`}
+                  onClick={() => setActivePanel('B')}
+                >
+                  <PreviewPanel
+                    definition={currentDefinition}
+                    config={panelB.config}
+                    onToggle={() => handleToggle('B')}
+                    isPlaying={isPlaying}
+                    label="Panel B"
+                  />
+                </div>
+              </div>
+            ) : (
+              <PreviewPanel
+                definition={currentDefinition}
+                config={panelA.config}
+                onToggle={() => handleToggle('A')}
+                isPlaying={isPlaying}
+              />
+            )}
+
+            {/* Split mode panel selector hint */}
+            {splitMode && (
+              <p className="text-xs text-center text-muted-foreground">
+                Click a panel to select it for editing. Currently editing: <strong>Panel {activePanel}</strong>
+              </p>
+            )}
           </div>
 
-          {/* Controls Panel */}
+          {/* Right Column: Props Inspector */}
           <div className="space-y-4">
-            {/* Tabs */}
-            <div className="flex gap-1 p-1 bg-muted/50 rounded-xl">
-              {(['playback', 'timing', 'colors'] as const).map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={cn(
-                    "flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors capitalize",
-                    activeTab === tab
-                      ? "bg-background shadow-sm text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  {tab}
-                </button>
-              ))}
-            </div>
-
-            <div className="bg-card border border-border rounded-2xl p-5 space-y-5">
-              {activeTab === 'playback' && (
-                <>
-                  {/* Loop Control */}
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <label className="text-sm font-medium text-foreground">Loop Mode</label>
-                      <button
-                        onClick={() => updateConfig('infiniteLoop', !config.infiniteLoop)}
-                      className={cn(
-                          "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors",
-                          config.infiniteLoop
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-muted/50 text-muted-foreground hover:bg-muted"
-                        )}
-                      >
-                        <InfinityIcon className="w-4 h-4" />
-                        {config.infiniteLoop ? 'Infinite' : 'Finite'}
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Toggle Count */}
-                  {!config.infiniteLoop && (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <label className="text-sm font-medium text-foreground">Toggle Count</label>
-                        <span className="text-sm font-mono text-muted-foreground">{config.toggleCount}x</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="1"
-                        max="20"
-                        value={config.toggleCount}
-                        onChange={(e) => updateConfig('toggleCount', parseInt(e.target.value))}
-                        className="w-full accent-primary"
-                      />
-                      <div className="flex gap-2">
-                        {[1, 2, 4, 8, 16].map((n) => (
-                          <button
-                            key={n}
-                            onClick={() => updateConfig('toggleCount', n)}
-                            className={cn(
-                              "flex-1 py-1 text-xs rounded-md transition-colors",
-                              config.toggleCount === n
-                                ? "bg-primary text-primary-foreground"
-                                : "bg-muted/50 hover:bg-muted"
-                            )}
-                          >
-                            {n}x
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Delay Between Toggles */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label className="text-sm font-medium text-foreground">Delay Between</label>
-                      <span className="text-sm font-mono text-muted-foreground">{config.delay}ms</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="0"
-                      max="2000"
-                      step="50"
-                      value={config.delay}
-                      onChange={(e) => updateConfig('delay', parseInt(e.target.value))}
-                      className="w-full accent-primary"
-                    />
-                    <div className="flex gap-2">
-                      {[0, 250, 500, 1000].map((ms) => (
-                        <button
-                          key={ms}
-                          onClick={() => updateConfig('delay', ms)}
-                          className={cn(
-                            "flex-1 py-1 text-xs rounded-md transition-colors",
-                            config.delay === ms
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-muted/50 hover:bg-muted"
-                          )}
-                        >
-                          {ms}ms
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Playback Speed */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label className="text-sm font-medium text-foreground flex items-center gap-2">
-                        {config.speed < 1 ? <ZapOff className="w-4 h-4" /> : <Zap className="w-4 h-4" />}
-                        Playback Speed
-                      </label>
-                      <span className="text-sm font-mono text-muted-foreground">{config.speed}x</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="0.1"
-                      max="2"
-                      step="0.05"
-                      value={config.speed}
-                      onChange={(e) => updateConfig('speed', parseFloat(e.target.value))}
-                      className="w-full accent-primary"
-                    />
-                    <div className="flex gap-1">
-                      {speedPresets.map((preset) => (
-                        <button
-                          key={preset.value}
-                          onClick={() => updateConfig('speed', preset.value)}
-                          className={cn(
-                            "flex-1 py-1 text-xs rounded-md transition-colors",
-                            config.speed === preset.value
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-muted/50 hover:bg-muted"
-                          )}
-                        >
-                          {preset.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {activeTab === 'timing' && (
-                <>
-                  {/* Duration */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <label className="text-sm font-medium text-foreground">Animation Duration</label>
-                      <input
-                        type="number"
-                        min="100"
-                        max="3000"
-                        step="50"
-                        value={config.duration}
-                        onChange={(e) => updateConfig('duration', parseInt(e.target.value) || 500)}
-                        className="w-20 px-2 py-1 text-sm font-mono bg-muted/50 border border-border rounded-md text-right"
-                      />
-                    </div>
-                    <input
-                      type="range"
-                      min="100"
-                      max="3000"
-                      step="50"
-                      value={config.duration}
-                      onChange={(e) => updateConfig('duration', parseInt(e.target.value))}
-                      className="w-full accent-primary"
-                    />
-                    <div className="flex gap-2">
-                      {[200, 300, 500, 700, 1000].map((ms) => (
-                        <button
-                          key={ms}
-                          onClick={() => updateConfig('duration', ms)}
-                          className={cn(
-                            "flex-1 py-1 text-xs rounded-md transition-colors",
-                            config.duration === ms
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-muted/50 hover:bg-muted"
-                          )}
-                        >
-                          {ms}ms
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Bezier Curve */}
-                  <div className="space-y-3 pt-2">
-                    <label className="text-sm font-medium text-foreground">Easing Curve</label>
-                    <BezierCurveEditor
-                      value={config.bezier}
-                      onChange={(value) => updateConfig('bezier', value)}
-                    />
-                  </div>
-                </>
-              )}
-
-              {activeTab === 'colors' && (
-                <div className="space-y-4">
-                  <ColorPicker
-                    label="Active (Primary)"
-                    value={colors.active}
-                    onChange={(v) => updateColor('active', v)}
-                  />
-                  <ColorPicker
-                    label="Success"
-                    value={colors.success}
-                    onChange={(v) => updateColor('success', v)}
-                  />
-                  <ColorPicker
-                    label="Warning"
-                    value={colors.warning}
-                    onChange={(v) => updateColor('warning', v)}
-                  />
-                  <ColorPicker
-                    label="Danger"
-                    value={colors.danger}
-                    onChange={(v) => updateColor('danger', v)}
-                  />
-                  <div className="border-t border-border pt-4">
-                    <ColorPicker
-                      label="Default (Off)"
-                      value={colors.default}
-                      onChange={(v) => updateColor('default', v)}
-                    />
-                    <div className="mt-4">
-                      <ColorPicker
-                        label="Default Hover"
-                        value={colors.defaultDark}
-                        onChange={(v) => updateColor('defaultDark', v)}
-                      />
-                    </div>
-                  </div>
-                  
-                  <button
-                    onClick={() => setColors(DEFAULT_COLORS)}
-                    className="w-full py-2 text-sm bg-muted/50 hover:bg-muted rounded-lg transition-colors"
+            <Card className="p-5 bg-gray-900 border-gray-800 sticky top-4 max-h-[calc(100vh-2rem)] overflow-y-auto">
+              {splitMode && (
+                <div className="flex items-center gap-2 mb-4 pb-4 border-b border-gray-800">
+                  <Button
+                    variant={activePanel === 'A' ? 'default' : 'outline'}
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => setActivePanel('A')}
                   >
-                    Reset to Defaults
-                  </button>
+                    Panel A
+                  </Button>
+                  <Button
+                    variant={activePanel === 'B' ? 'default' : 'outline'}
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => setActivePanel('B')}
+                  >
+                    Panel B
+                  </Button>
                 </div>
               )}
-            </div>
-
-            {/* Export/Code */}
-            <div className="bg-muted/30 border border-border rounded-xl p-4">
-              <label className="text-xs font-medium text-muted-foreground mb-2 block">Generated CSS</label>
-              <pre className="text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap break-all">
-{`transition: transform ${config.duration}ms 
-  cubic-bezier(${config.bezier.join(', ')});
-
---c-active: ${getActiveColor()};
---c-default: ${colors.default};`}
-              </pre>
-            </div>
+              
+              <h3 className="text-sm font-semibold mb-4 text-muted-foreground uppercase tracking-wider">
+                Properties {splitMode && `(${activePanel})`}
+              </h3>
+              
+              <PropInspector
+                schema={currentDefinition.propSchema}
+                values={currentPanel.config.props}
+                onChange={currentPanel.updateProp}
+              />
+            </Card>
           </div>
         </div>
       </div>
     </div>
-  );
+  )
 }
